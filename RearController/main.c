@@ -41,60 +41,48 @@
 #include "BikeCommon.h"
 
 /*
- * Other library includes
+ * Utility Library includes
  */
 
 #include "util_macros.h"
 
 /*
+ * Generic Library Includes
+ */
+
+#include "heartbeat.h"
+
+/*
+ * Local Application Includes
+ */
+
+#include "anker.h"
+
+/*
  * Private Defines and Datatypes
  */
 
-/*#define BRAKE_1_MIN 100
-#define BRAKE_1_MAX 250
-#define BRAKE_1_RANGE (BRAKE_1_MAX - BRAKE_1_MIN)
+#define APPLICATION_TICK_MS (5)
+#define HEARTBEAT_TIME_MS (500)
 
-#define BRAKE_2_MIN 100
-#define BRAKE_2_MAX 250
-#define BRAKE_2_RANGE (BRAKE_2_MAX - BRAKE_2_MIN)
-*/
-#define APPLICATION_TICK_MS 5
-/*
-#define ANKER_PERIOD_S (20)
-#define ANKER_PERIOD_MS (ANKER_PERIOD_S * 1000)
-#define ANKER_PERIOD_TICKS (ANKER_PERIOD_MS / APPLICATION_TICK_MS)
-
-#define ANKER_DUTY_CYCLE_PC (1)
-#define ANKER_ON_MS ((ANKER_PERIOD_MS * ANKER_DUTY_CYCLE_PC) / 100)
-#define ANKER_ON_TICKS (ANKER_ON_MS / APPLICATION_TICK_MS)
-*/
 #define ANKER_PORT PORTC
 #define ANKER_PIN PIN4
+
+#define LIGHT_MA_MAX (50)
+
 /*
-#define ANKER_CURRENT_SETTING_DUTY_10BIT 255
+#define LIGHTS_PWM_CHANNEL TMR_OCCHAN_B
+*/
 
-#define ANKER_PWM_CHANNEL TMR_OCCHAN_A
-#define LIGHTS_PWM_CHANNEL TMR_OCCHAN_B*/
-
-enum state_enum
+enum application_state_enum
 {
-	STATE_IDLE,
-	STATE_STARTED,
-	STATE_READ1_SENT,
-	STATE_READ2_SENT,
-	STATE_END_SENT,
-	STATE_END
+	STATE_CONFIGURING,
+	STATE_RUNNING,
 };
-typedef enum state_enum STATE_ENUM;
+typedef enum application_state_enum APPLICATION_STATE_ENUM;
 
-/*
- * Private Variables
- */
-static STATE_ENUM state = STATE_IDLE;
-static uint16_t brakes[2] = {0, 0};
-
-static SPI_DATA spi;
-static TMR8_TICK_CONFIG tick;
+typedef bool (*SPI_HANDLER)(uint8_t input, uint8_t *reply);
+typedef void (*APPLICATION_STATE_HANDLER)*void);
 
 /*
  * Private Function Prototypes
@@ -103,10 +91,49 @@ static TMR8_TICK_CONFIG tick;
 static void setupIO(void);
 static void setupTimer(void);
 
-static void applicationTick(void);
 static void handleSPI(void);
 static void updateLights(void);
 static void updateAnker(void);
+
+static void startBrakeSensorSPISeq(void);
+static void startInputConfigSPISeq(void);
+
+// Application tick handlers
+static void applicationGlobalTick(void);
+static void configHandler(void);
+static void runningHandler(void);
+
+/*
+ * Private Variables
+ */
+static APPLICATION_STATE_ENUM applicationState = STATE_CONFIGURING;
+
+static uint8_t minima[2] = {128, 128};
+static uint8_t maxima[2] = {-127, -127};
+
+static uint8_t brakes[2] = {0, 0};
+
+static SPI_DATA spi;
+static TMR8_TICK_CONFIG tick;
+
+static uint16_t lightPWM = 0;
+
+static SPI_HANDLER fnSpiHandler = NULL;
+static uint8_t spiByteCount = 0;
+static bool spiIsIdle = true;
+
+static APPLICATION_STATE_HANDLER stateHandlers[] = 
+{
+	configHandler, /* STATE_CONFIGURING */
+	runningHandler /* STATE_RUNNING */
+};
+
+// Configuration of forward sensor inputs
+static const inputConfig[2] = 
+{
+	BIKE_IO_INDEX_TO_BYTE(IO_PA0) | BIKE_IO_CONFIG_TO_BYTE(INPUT_ADC),
+	BIKE_IO_INDEX_TO_BYTE(IO_PA1) | BIKE_IO_CONFIG_TO_BYTE(INPUT_ADC)
+};
 
 int main(void)
 {
@@ -117,6 +144,12 @@ int main(void)
 
 	setupTimer();
 	setupIO();
+	
+	Heartbeat_Init(APPLICATION_TICK_MS, HEARTBEAT_TIME_MS);
+	
+	ANKER_Init(APPLICATION_TICK_MS);
+	
+	startInputConfigSPISeq();
 	
 	sei();
 	
@@ -129,11 +162,23 @@ int main(void)
 		
 		if (TMR8_Tick_TestAndClear(&tick))
 		{
-			applicationTick();
+			// Pass processing to the application handler for the current state
+			stateHandlers[applicationState]();
+			
+			// Do any global application level stuff
+			applicationGlobalTick();
 		}
 	}
 }
 
+static void applicationGlobalTick(void)
+{
+	if ( Heartbeat_Tick() )
+	{
+		IO_Toggle(HEARTBEAT_PORT, HEARTBEAT_PIN);
+	}
+	
+}
 static void setupIO(void)
 {
 	IO_SetMode(ANKER_PORT, ANKER_PIN, IO_MODE_OUTPUT);
@@ -152,88 +197,153 @@ static void setupTimer(void)
 	TMR8_Tick_AddTimerConfig(&tick);
 
 	/*TMR16_SetCountMode(TMR16_COUNTMODE_FASTPWM_10BIT);
-
-	TMR16_SetOutputCompareMode(TMR_OUTPUTMODE_SET, ANKER_PWM_CHANNEL);
-	TMR16_SetOutputCompareValue(ANKER_CURRENT_SETTING_DUTY_10BIT, ANKER_PWM_CHANNEL);
-
 	TMR16_SetOutputCompareMode(TMR_OUTPUTMODE_SET, LIGHTS_PWM_CHANNEL);
 	TMR16_SetOutputCompareValue(0, LIGHTS_PWM_CHANNEL);*/
 }
 
-static void applicationTick(void)
+static void configHandler(void)
 {
-	updateLights();
+	if (spiIsIdle)
+	{
+		applicationState = STATE_RUNNING;
+	}
+}
+
+static void runningHandler(void)
+{
+	if (spiIsIdle)
+	{
+		startBrakeSensorSPISeq();
+	}
 	updateAnker();
+	updateLights();
+}
+
+static void startBrakeSensorSPISeq(void)
+{
+	// Send first byte for brake position sense
+	spiIsIdle = false;
+	fnSpiHandler = inputConfigHandler;
+	SPI_SendByte(BP_PACKET_START, &spi);
+}
+
+
+static void startInputConfigSPISeq(void)
+{
+	// Send first byte for input config
+	spiIsIdle = false;
+	fnSpiHandler = brakeSensorSPIHandler;
+	SPI_SendByte(BP_PACKET_START, &spi);
 }
 
 static void handleSPI(void)
 {
-	uint8_t reply = spi.byte;
+	bool sendReply = false;
+	uint8_t reply = 0x00;
 	
-	STATE_ENUM thisState = state;
-	++state;
+	sendReply = fnSpiHandler(spi.byte, &reply);
 	
-	switch (thisState)
+	if (sendReply)
 	{
-	case STATE_IDLE:
-		SPI_SendByte(BP_PACKET_START, &spi);
-		// No reply - this is first byte of packet
-		break;
-	case STATE_STARTED:
-		SPI_SendByte(BP_READ_BRAKE_SENSORS, &spi);
+		SPI_SendByte(reply, &spi);
+		spiByteCount++;
+	}
+	else
+	{
+		spiIsIdle = true;
+		spiByteCount = 0;
+	}
+}
+
+static bool brakeSensorSPIHandler(uint8_t input, uint8_t *reply)
+{
+	bool sendReply = true;
+	
+	switch(spiByteCount)
+	{
+	case 0:
+		*reply = BP_READ_SENSORS;
 		// Nothing to do with idle reply (0xFF)
 		break;
-	case STATE_READ1_SENT:
+	case 1:
 		// Nothing to do with start reply (0x01)
-		SPI_SendByte(BP_READ_BRAKE_SENSORS, &spi);
+		*reply = BP_READ_SENSORS;
 		break;
-	case STATE_READ2_SENT:
+	case 2:
 		// Reply is first brake reading, and this is the last request
-		brakes[0] = reply;
-		SPI_SendByte(BP_PACKET_END, &spi);
+		brakes[0] = input;
+		*reply = BP_PACKET_END;
 		break;
-	case STATE_END_SENT:
+	case 3:
 		// Reply is second brake reading, no more writes required
 		brakes[1] = reply;
+		sendReply = false;
 		break;
-	case STATE_END:
+	default:
+		sendReply = false;
 		break; // Nothing to do and should never reach here
 	}
 	
-	if (state == STATE_END)
+	return sendReply;
+}
+
+static bool inputConfigSPIHandler(uint8_t input, uint8_t *reply)
+{
+	bool sendReply = true;
+	
+	switch(spiByteCount)
 	{
-		state = STATE_IDLE;
+	case 0:
+		*reply = BP_INPUT_CONFIG;
+		break;
+	case 1:
+		*reply = inputConfig[0];
+		break;
+	case 2:
+		*reply = inputConfig[1];
+		break;
+	case 3:
+		*reply = BP_PACKET_END;
+		break;
+	case 4:
+		sendReply = false;
+		break;
+	default:
+		sendReply = false;
+		break;
 	}
+	
+	return sendReply;
 }
 
 static void updateLights(void)
 {
-	/*brakes[0] = ((brakes[0] - BRAKE_1_MIN) * 100) / BRAKE_1_RANGE;
-	brakes[1] = ((brakes[1] - BRAKE_2_MIN) * 100) / BRAKE_2_RANGE;
+	// Get new min and max values
+	minima[0] = min(brakes[0], minima[0]);
+	minima[1] = min(brakes[1], minima[1]);
+	maxima[0] = min(brakes[0], maxima[0]);
+	maxima[1] = min(brakes[1], maxima[1]);
 	
-	brakes[0] = min(0xFFFF, brakes[0]);
-	brakes[1] = min(0xFFFF, brakes[1]);
+	// Calculate the new braking range
+	uint8_t brakeRange[2] = {
+		maxima[0] - minima[0],
+		maxima[1] - minima[1]
+	};
 	
-	uint16_t pwm = ((brakes[0] * 3) / 4) + brakes[1];
+	// Get the current brake setting and convert from 8- to 16-bit for PWM
+	uint16_t brakeSetting[2] = {
+		((uint16_t)(brakes[0] - minima[0]) * UINT16_MAX) / brakeRange[0],
+		((uint16_t)(brakes[1] - minima[1]) * UINT16_MAX) / brakeRange[1]
+	};
 	
-	TMR16_SetOutputCompareValue(pwm, LIGHTS_PWM_CHANNEL);*/
+	lightPWM = ((brakeSetting[0] * 3) / 4) + brakeSetting[1];
+	
+	TMR16_SetOutputCompareValue(lightPWM, LIGHTS_PWM_CHANNEL);*/
 }
 
 static void updateAnker(void)
 {
-	/*static uint16_t ticks = 0;
-	
-	if (ticks < ANKER_ON_TICKS)
-	{
-		IO_On(ANKER_PORT, ANKER_PIN);
-	}
-	else
-	{
-		IO_Off(ANKER_PORT, ANKER_PIN);
-	}
-	
-	ticks = (ticks == ANKER_PERIOD_TICKS) ? 0 : ticks + 1;*/
-	static bool on = false;
+	bool on = ANKER_MsTick( currentSettingmA() );
 
 	if (on)
 	{
@@ -243,6 +353,9 @@ static void updateAnker(void)
 	{
 		IO_On(ANKER_PORT, ANKER_PIN);
 	}
+}
 
-	on = !on;
+static uint8_t currentSettingmA(void)
+{
+	return (lightPWM * LIGHT_MA_MAX) / UINT16_MAX;
 }

@@ -26,6 +26,15 @@ enum bike_io_enum
 };
 typedef enum bike_io_enum BIKE_IO_ENUM;
 
+enum io_config_enum
+{
+	INPUT_NORMAL,
+	INPUT_PULLUP,
+	INPUT_ADC,
+	OUTPUT
+};
+typedef enum io_config_enum IO_CONFIG_ENUM;
+
 /* Input Config Helpers */
 
 #define BIKE_IO_INDEX_FROM_BYTE(byte) (((byte) & 0xF0) >> 4)

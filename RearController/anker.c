@@ -52,10 +52,10 @@ bool ANKER_MsTick(uint16_t currentmA)
 	{
 		if (currentmA > MINIMUM_CURRENT_MA)
 		{
-			/* Count the number of ms over minimum current */
+			// Count the number of ms over minimum current
 			overcurrentMsCount += msTick;
 			
-			/* Has there been this current for at least the minimum time? */
+			// Has there been this current for at least the minimum time?
 			if (overcurrentMsCount > MINIMUM_TIME_MS)
 			{
 				overMinimumThisPeriod = true;
@@ -63,11 +63,11 @@ bool ANKER_MsTick(uint16_t currentmA)
 		}
 		else
 		{
-			/* Reset after having dropped below minimum */
+			// Reset after having dropped below minimum
 			overcurrentMsCount = 0;
 		}
 	}
-	else (periodMsCount < TIMING_PERIOD_MS)
+	else if (periodMsCount < TIMING_PERIOD_MS)
 	{
 		// Signal application to turn on extra load if required
 		loadRequired = !overMinimumThisPeriod;
@@ -86,5 +86,4 @@ void reset(void)
 	overMinimumThisPeriod = false;
 	overcurrentMsCount = 0;
 	periodMsCount = 0;
-	msTick = 0;
 }

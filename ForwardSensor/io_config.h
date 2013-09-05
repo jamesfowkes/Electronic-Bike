@@ -5,15 +5,6 @@
  * Defines and typedefs
  */
  
-enum io_config_enum
-{
-	INPUT_NORMAL,
-	INPUT_PULLUP,
-	INPUT_ADC,
-	OUTPUT
-};
-typedef enum io_config_enum IO_CONFIG_ENUM;
-
 /*
  * Public Function Prototypes
  */

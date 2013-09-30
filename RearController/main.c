@@ -47,12 +47,6 @@
 #include "util_macros.h"
 
 /*
- * Generic Library Includes
- */
-
-#include "heartbeat.h"
-
-/*
  * Local Application Includes
  */
 
@@ -63,12 +57,12 @@
  */
 
 #define APPLICATION_TICK_MS (5)
-#define HEARTBEAT_TIME_MS (500)
+#define HEARTBEAT_TICK_MS (500)
 
 #define ANKER_PORT IO_PORTD
 #define ANKER_PIN 6
 
-#define HEARTBEAT_PORT IO_PORTD
+#define HEARTBEAT_PORT PIND
 #define HEARTBEAT_PIN 5
 
 #define BRAKELIGHT_PORT IO_PORTC
@@ -109,7 +103,6 @@ static void startInputConfigSPISeq(void);
 static uint8_t currentSettingmA(void);
 
 // Application tick handlers
-static void applicationGlobalTick(void);
 static void configHandler(void);
 static void runningHandler(void);
 
@@ -124,7 +117,8 @@ static uint8_t maxima[2] = {-127, -127};
 static uint8_t brakes[2] = {0, 0};
 
 static SPI_DATA spi;
-static TMR8_TICK_CONFIG tick;
+static TMR8_TICK_CONFIG appTick;
+static TMR8_TICK_CONFIG hbTick;
 
 static uint16_t lightPWM = 0;
 
@@ -155,8 +149,6 @@ int main(void)
 	setupTimer();
 	setupIO();
 	
-	Heartbeat_Init(APPLICATION_TICK_MS, HEARTBEAT_TIME_MS);
-	
 	ANKER_Init(APPLICATION_TICK_MS);
 	
 	SPI_SetMaster(LIBSPI_MSTRFREQ_FOSC64);
@@ -172,25 +164,22 @@ int main(void)
 			handleSPI();
 		}
 		
-		if (TMR8_Tick_TestAndClear(&tick))
+		if (TMR8_Tick_TestAndClear(&appTick))
 		{
 			// Pass processing to the application handler for the current state
 			stateHandlers[applicationState]();
-			
-			// Do any global application level stuff
-			applicationGlobalTick();
+		}
+
+		if (TMR8_Tick_TestAndClear(&hbTick))
+		{
+			if (applicationState == STATE_RUNNING)
+			{
+				IO_Toggle(HEARTBEAT_PORT, HEARTBEAT_PIN);
+			}
 		}
 	}
 }
 
-static void applicationGlobalTick(void)
-{
-	if ( Heartbeat_Tick() && (applicationState == STATE_RUNNING))
-	{
-		IO_Toggle(HEARTBEAT_PORT, HEARTBEAT_PIN);
-	}
-	
-}
 static void setupIO(void)
 {
 	IO_SetMode(ANKER_PORT, ANKER_PIN, IO_MODE_OUTPUT);
@@ -206,9 +195,13 @@ static void setupTimer(void)
 
 	TMR8_Tick_Init();
 
-	tick.reload = APPLICATION_TICK_MS;
-	tick.active = true;
-	TMR8_Tick_AddTimerConfig(&tick);
+	appTick.reload = APPLICATION_TICK_MS;
+	appTick.active = true;
+	TMR8_Tick_AddTimerConfig(&appTick);
+
+	hbTick.reload = HEARTBEAT_TICK_MS;
+	hbTick.active = true;
+	TMR8_Tick_AddTimerConfig(&hbTick);
 
 	TMR16_SetSource(TMR_SRC_FCLK);
 	TMR16_SetCountMode(TMR16_COUNTMODE_FASTPWM_10BIT);

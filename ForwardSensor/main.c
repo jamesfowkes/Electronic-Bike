@@ -295,7 +295,7 @@ static uint8_t handleDataByte(void)
 	case BP_PING:
 		data = BP_PING;
 		break;
-	case BP_INPUT_CONFIG:
+	case BP_IO_CONFIG:
 		data = handleInputConfig();
 		break;
 	case BP_READ_SENSORS:

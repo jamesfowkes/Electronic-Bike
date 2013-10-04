@@ -181,7 +181,7 @@ static void setupADC(void)
 static void setupTimer(void)
 {
 	CLK_Init(0);
-	TMR8_Tick_Init();
+	TMR8_Tick_Init(1, 0);
 
 	tick.reload = MS_TICK;
 	tick.active = true;

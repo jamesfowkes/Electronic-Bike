@@ -193,7 +193,7 @@ static void setupTimer(void)
 	CLK_Init(F_CPU);
 	CLK_SetPrescaler(clock_div_8);
 
-	TMR8_Tick_Init();
+	TMR8_Tick_Init(2, 0);
 
 	appTick.reload = APPLICATION_TICK_MS;
 	appTick.active = true;

@@ -1,0 +1,14 @@
+## Compiled Objects ##
+*.o
+*.exe
+*.hex
+*.elf
+*.map
+
+## Makefile and ancillary outputs ##
+makefile
+error.txt
+## LUFA Library ##
+LUFA/*
+
+

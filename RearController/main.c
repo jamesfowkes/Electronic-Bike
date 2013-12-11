@@ -135,8 +135,8 @@ static APPLICATION_STATE_HANDLER stateHandlers[] =
 // Configuration of forward sensor inputs
 static const uint8_t inputConfig[2] =
 {
-	BIKE_IO_INDEX_TO_BYTE(IO_PA0) | BIKE_IO_CONFIG_TO_BYTE(INPUT_ADC),
-	BIKE_IO_INDEX_TO_BYTE(IO_PA1) | BIKE_IO_CONFIG_TO_BYTE(INPUT_ADC)
+	BIKE_MAKE_IO_CONFIG(IO_PA0, INPUT_ADC),
+	BIKE_MAKE_IO_CONFIG(IO_PA1, INPUT_ADC)
 };
 
 int main(void)

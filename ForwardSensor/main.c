@@ -87,7 +87,7 @@ static void setupTimer(void);
 
 static void enableComms(void);
 
-static void spiHandler(void);
+static void spiHandler(SPI_DATA * spi);
 static void adcHandler(void);
 
 /*
@@ -97,7 +97,7 @@ static void adcHandler(void);
  /* Library control structures */
 static TMR8_TICK_CONFIG tick;
 static ADC_CONTROL_ENUM adc;
-static SPI_DATA spi;
+static SPI_DATA s_spi;
 
 /* ADC readings and control */
 static uint8_t adcValues[IO_MAX];
@@ -124,17 +124,15 @@ int main(void)
 
 	enableComms();
 
-	SPI_SetSlave(0xFF, &spi);
+	s_spi.callback = spiHandler;
+	SPI_SetSlave(0xFF, &s_spi);
 	
 	sei();
 
 	while (true)
 	{
 
-		if (SPI_TestAndClear(&spi))
-		{
-			spiHandler();
-		}
+		(void)SPI_TestAndCallback(&s_spi);
 
 		if (ADC_TestAndClear(&adc))
 		{
@@ -215,8 +213,8 @@ static void applicationTick(void)
 static uint8_t handleInputConfig(void)
 {
 	// Upper nibble is IO index, lower nibble is new config type
-	uint8_t io_index = BIKE_IO_INDEX_FROM_BYTE(spi.byte);
-	IO_CONFIG_ENUM io_type = BIKE_IO_CONFIG_FROM_BYTE(spi.byte);
+	uint8_t io_index = BIKE_IO_INDEX_FROM_BYTE(s_spi.byte);
+	IO_CONFIG_ENUM io_type = BIKE_IO_CONFIG_FROM_BYTE(s_spi.byte);
 
 	uint8_t reply = 0x00;
 
@@ -233,8 +231,8 @@ static uint8_t getSensorReading(void)
 
 static uint8_t newOutputs(void)
 {
-	uint8_t io_index = BIKE_IO_INDEX_FROM_BYTE(spi.byte);
-	bool set = BIKE_OUTPUT_SETTING_FROM_BYTE(spi.byte);
+	uint8_t io_index = BIKE_IO_INDEX_FROM_BYTE(s_spi.byte);
+	bool set = BIKE_OUTPUT_SETTING_FROM_BYTE(s_spi.byte);
 
 	uint8_t reply = 0x00;
 
@@ -249,41 +247,42 @@ static void adcHandler(void)
 	adcValues[adc.channel] = (uint8_t)(adc.reading / 4);
 }
 
-static void spiHandler(void)
+static void spiHandler(SPI_DATA * spi)
 {
+	if (spi = &s_spi)
+	{
+		uint8_t byte = s_spi.byte;
+		uint8_t reply = BP_NONE;
 
-	uint8_t byte = spi.byte;
-	uint8_t reply = BP_NONE;
-
-	if ((byte == BP_PACKET_START) && (spiState == SPI_STATE_IDLE))
-	{
-		spiState = SPI_STATE_START;
-		reply = BP_PACKET_START;
-	}
-	else if (spiState == SPI_STATE_START)
-	{
-		packetID = (BIKE_PROTOCOL_ENUM)byte;
-		spiState = SPI_STATE_DATA;
-		reply = byte;
-		dataCounter = 0;
-	}
-	else if (spiState == SPI_STATE_DATA)
-	{
-		if (byte != BP_PACKET_END)
+		if ((byte == BP_PACKET_START) && (spiState == SPI_STATE_IDLE))
 		{
-			reply = handleDataByte();
-			dataCounter++;
+			spiState = SPI_STATE_START;
+			reply = BP_PACKET_START;
 		}
-		else
+		else if (spiState == SPI_STATE_START)
 		{
+			packetID = (BIKE_PROTOCOL_ENUM)byte;
+			spiState = SPI_STATE_DATA;
+			reply = byte;
 			dataCounter = 0;
-			reply = BP_PACKET_END;
-			spiState = SPI_STATE_IDLE;
 		}
+		else if (spiState == SPI_STATE_DATA)
+		{
+			if (byte != BP_PACKET_END)
+			{
+				reply = handleDataByte();
+				dataCounter++;
+			}
+			else
+			{
+				dataCounter = 0;
+				reply = BP_PACKET_END;
+				spiState = SPI_STATE_IDLE;
+			}
+		}
+
+		SPI_SetReply(reply, &s_spi);
 	}
-
-	SPI_SetReply(reply, &spi);
-
 }
 
 static uint8_t handleDataByte(void)

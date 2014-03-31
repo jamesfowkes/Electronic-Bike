@@ -90,7 +90,7 @@ typedef void (*APPLICATION_STATE_HANDLER)(void);
 static void setupIO(void);
 static void setupTimer(void);
 
-static void handleSPI(void);
+static void handleSPI(SPI_DATA * data);
 static bool brakeSensorSPIHandler(uint8_t input, uint8_t *reply);
 static bool inputConfigSPIHandler(uint8_t input, uint8_t *reply);
 
@@ -151,6 +151,7 @@ int main(void)
 	
 	ANKER_Init(APPLICATION_TICK_MS);
 	
+	spi.callback = handleSPI;
 	SPI_SetMaster(LIBSPI_MSTRFREQ_FOSC64);
 
 	startInputConfigSPISeq();
@@ -159,10 +160,7 @@ int main(void)
 	
 	while (true)
 	{
-		if (SPI_TestAndClear(&spi))
-		{
-			handleSPI();
-		}
+		(void)SPI_TestAndCallback(&spi);
 		
 		if (TMR8_Tick_TestAndClear(&appTick))
 		{
@@ -245,22 +243,25 @@ static void startInputConfigSPISeq(void)
 	SPI_SendByte(BP_PACKET_START, &spi);
 }
 
-static void handleSPI(void)
+static void handleSPI(SPI_DATA * data)
 {
-	bool sendReply = false;
-	uint8_t reply = 0x00;
-	
-	sendReply = fnSpiHandler(spi.byte, &reply);
-	
-	if (sendReply)
+	if (data == &spi)
 	{
-		SPI_SendByte(reply, &spi);
-		spiByteCount++;
-	}
-	else
-	{
-		spiIsIdle = true;
-		spiByteCount = 0;
+		bool sendReply = false;
+		uint8_t reply = 0x00;
+		
+		sendReply = fnSpiHandler(spi.byte, &reply);
+		
+		if (sendReply)
+		{
+			SPI_SendByte(reply, &spi);
+			spiByteCount++;
+		}
+		else
+		{
+			spiIsIdle = true;
+			spiByteCount = 0;
+		}
 	}
 }
 
@@ -298,6 +299,8 @@ static bool brakeSensorSPIHandler(uint8_t input, uint8_t *reply)
 
 static bool inputConfigSPIHandler(uint8_t input, uint8_t *reply)
 {
+	(void)input;
+	
 	bool sendReply = true;
 
 	switch(spiByteCount)
